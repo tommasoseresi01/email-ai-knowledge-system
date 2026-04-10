@@ -28,6 +28,25 @@ def embed_query(text: str) -> list[float]:
         f"{OLLAMA_URL}/api/embed",
         json={"model": EMBED_MODEL, "input": text}
     )
+
+    if resp.status_code == 404:
+        try:
+            err_msg = resp.json().get("error", "")
+        except ValueError:
+            err_msg = ""
+
+        if "model" in err_msg.lower():
+            raise RuntimeError(
+                f"Modello '{EMBED_MODEL}' non trovato. Esegui: ollama pull {EMBED_MODEL}"
+            )
+        # 404 sull'endpoint → versione Ollama < 0.1.24, prova API legacy
+        resp = requests.post(
+            f"{OLLAMA_URL}/api/embeddings",
+            json={"model": EMBED_MODEL, "prompt": text}
+        )
+        resp.raise_for_status()
+        return resp.json()["embedding"]
+
     resp.raise_for_status()
     return resp.json()["embeddings"][0]
 

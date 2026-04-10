@@ -78,13 +78,58 @@ def fetch_emails(token: str, max_emails: int = 300) -> list[dict]:
     return emails
 
 
+# ── Validazione Ollama ───────────────────────────────────────────────────────
+def check_ollama():
+    """Verifica che Ollama sia attivo e che il modello di embedding sia installato."""
+    try:
+        resp = requests.get(f"{OLLAMA_URL}/api/tags", timeout=5)
+        resp.raise_for_status()
+    except requests.exceptions.ConnectionError:
+        raise SystemExit(
+            f"❌ Ollama non raggiungibile su {OLLAMA_URL}.\n"
+            f"   Avvialo con: ollama serve"
+        )
+
+    installed = [m["name"].split(":")[0] for m in resp.json().get("models", [])]
+    if EMBED_MODEL not in installed:
+        raise SystemExit(
+            f"❌ Modello '{EMBED_MODEL}' non installato in Ollama.\n"
+            f"   Esegui: ollama pull {EMBED_MODEL}"
+        )
+    print(f"✅ Ollama attivo — modello '{EMBED_MODEL}' disponibile.")
+
+
 # ── Embedding via Ollama ──────────────────────────────────────────────────────
 def embed_text(text: str) -> list[float]:
-    """Genera un vettore di embedding per il testo dato."""
+    """Genera un vettore di embedding per il testo dato.
+
+    Supporta sia Ollama >= 0.1.24 (/api/embed) che le versioni precedenti
+    (/api/embeddings), con fallback automatico. Distingue il 404 da
+    "endpoint non trovato" da quello da "modello non trovato".
+    """
     resp = requests.post(
         f"{OLLAMA_URL}/api/embed",
         json={"model": EMBED_MODEL, "input": text[:4000]}
     )
+
+    if resp.status_code == 404:
+        try:
+            err_msg = resp.json().get("error", "")
+        except ValueError:
+            err_msg = ""
+
+        if "model" in err_msg.lower():
+            raise RuntimeError(
+                f"Modello '{EMBED_MODEL}' non trovato. Esegui: ollama pull {EMBED_MODEL}"
+            )
+        # 404 sull'endpoint → versione Ollama < 0.1.24, prova API legacy
+        resp = requests.post(
+            f"{OLLAMA_URL}/api/embeddings",
+            json={"model": EMBED_MODEL, "prompt": text[:4000]}
+        )
+        resp.raise_for_status()
+        return resp.json()["embedding"]
+
     resp.raise_for_status()
     return resp.json()["embeddings"][0]
 
@@ -160,4 +205,5 @@ if __name__ == "__main__":
 
     token  = get_access_token()
     emails = fetch_emails(token, MAX_EMAILS)
+    check_ollama()
     index_emails(emails)
