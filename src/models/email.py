@@ -4,11 +4,6 @@ Modello dati Email.
 Unica definizione di cosa è un'Email in tutto il sistema.
 Ogni livello (clients, services, ui) usa questo dataclass —
 nessun dict grezzo dalla Graph API circola oltre il GraphClient.
-
-Vantaggi:
-- Type safety: niente più .get("from", {}).get("emailAddress", {})
-- Fase 1.1 (corpo completo): si aggiorna solo questo file
-- Testabilità: si creano Email di test in una riga
 """
 
 from dataclasses import dataclass, field
@@ -16,25 +11,30 @@ from dataclasses import dataclass, field
 
 @dataclass
 class Email:
-    id: str                          # Microsoft Graph message ID (chiave di deduplicazione)
+    id: str                          # Microsoft Graph message ID (deduplicazione)
     sender: str                      # "Nome <email@dominio.com>"
     subject: str                     # Oggetto dell'email
     date: str                        # "YYYY-MM-DD"
-    body: str                        # Testo per l'embedding semantico
-    preview: str                     # Anteprima breve per la UI
-    conversation_id: str | None = field(default=None)  # Per raggruppare thread (Fase 1.2)
+    body: str                        # Corpo completo (testo pulito, HTML strippato)
+    preview: str                     # Anteprima breve per la UI (~255 char)
+    conversation_id: str | None = field(default=None)
+    attachments_text: str = field(default="")  # Testo estratto dagli allegati
 
     def to_document(self) -> str:
         """
         Testo indicizzato in ChromaDB e usato per la ricerca semantica.
-        Modificare qui per cambiare cosa viene indicizzato (es. Fase 1.1: body completo).
+        Include corpo completo + testo allegati se presenti.
         """
-        return (
-            f"Da: {self.sender}\n"
-            f"Data: {self.date}\n"
-            f"Oggetto: {self.subject}\n\n"
-            f"{self.body}"
-        )
+        parts = [
+            f"Da: {self.sender}",
+            f"Data: {self.date}",
+            f"Oggetto: {self.subject}",
+            "",
+            self.body,
+        ]
+        if self.attachments_text:
+            parts.append(f"\n[ALLEGATI]\n{self.attachments_text}")
+        return "\n".join(parts)
 
     def to_metadata(self) -> dict:
         """
@@ -45,5 +45,6 @@ class Email:
             "from": self.sender,
             "subject": self.subject,
             "date": self.date,
-            "preview": self.preview[:300],
+            "preview": self.preview[:500],
+            "has_attachments": "true" if self.attachments_text else "false",
         }

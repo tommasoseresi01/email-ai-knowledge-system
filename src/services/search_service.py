@@ -1,11 +1,13 @@
 """
 Search Service — pipeline di ricerca e risposta.
 
-Orchestrazione pura: non conosce HTTP né UI.
-Coordina OllamaClient → VectorStore → OllamaClient (LLM).
+Orchestrazione pura: non conosce HTTP ne UI.
+Coordina OllamaClient -> VectorStore -> OllamaClient (LLM).
 
-Il prompt di sistema è definito qui, separato dalla logica applicativa.
-Per modificare il comportamento del modello basta cambiare SYSTEM_PROMPT.
+Il prompt di sistema e ottimizzato per:
+- Risposte basate SOLO sulle email fornite (no allucinazioni)
+- Citazione esplicita di mittente e data
+- Risposta strutturata in italiano professionale
 """
 
 import logging
@@ -18,13 +20,19 @@ from src.models.email import Email
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = (
-    "Sei un assistente aziendale esperto. "
-    "Rispondi alle domande basandoti ESCLUSIVAMENTE sulle email aziendali fornite nel contesto. "
-    "Se la risposta non è nelle email, dichiaralo chiaramente senza inventare. "
-    "Cita sempre la data e il mittente delle email che usi come fonte. "
-    "Rispondi sempre in italiano, in modo professionale e conciso."
-)
+SYSTEM_PROMPT = """\
+Sei un assistente aziendale che analizza email aziendali.
+
+REGOLE TASSATIVE:
+1. Rispondi ESCLUSIVAMENTE usando le informazioni contenute nelle email fornite.
+2. Per ogni affermazione, cita la fonte: mittente, data e oggetto dell'email.
+3. Se le email non contengono l'informazione richiesta, rispondi: \
+"Non ho trovato informazioni rilevanti nelle email indicizzate."
+4. NON inventare, NON dedurre, NON aggiungere informazioni esterne.
+5. Rispondi in italiano, in modo professionale e conciso.
+6. Se ci sono piu email rilevanti, organizza la risposta per punti.
+7. Indica sempre il periodo temporale coperto dalle email che citi.\
+"""
 
 
 @dataclass
@@ -39,27 +47,46 @@ class SearchService:
         self._ollama = ollama
         self._store = store
 
-    def ask(self, question: str, k: int | None = None) -> SearchResult:
+    def ask(
+        self,
+        question: str,
+        k: int | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> SearchResult:
         """
-        Pipeline completa domanda → risposta:
+        Pipeline completa domanda -> risposta:
         1. Embed della domanda
-        2. Ricerca semantica delle k email più rilevanti
-        3. Generazione risposta con LLM usando le email come contesto
+        2. Ricerca semantica con filtro opzionale per date
+        3. Generazione risposta con LLM
         4. Restituisce risposta + email sorgente
         """
         k = k or settings.top_k
 
         if self._store.count() == 0:
             return SearchResult(
-                answer="❌ Nessuna email indicizzata. Esegui prima: `python ingest.py`",
+                answer="Nessuna email indicizzata. Esegui prima: `python ingest.py`",
                 sources=[],
             )
 
         embedding = self._ollama.embed(question)
-        sources = self._store.search(embedding, k)
+        sources = self._store.search(
+            embedding, k, date_from=date_from, date_to=date_to
+        )
+
+        if not sources:
+            return SearchResult(
+                answer="Nessuna email trovata nel periodo selezionato.",
+                sources=[],
+            )
 
         context = "\n\n---\n\n".join(e.to_document() for e in sources)
-        user_message = f"EMAIL RILEVANTI:\n{context}\n\nDOMANDA: {question}"
+        user_message = (
+            f"EMAIL RILEVANTI ({len(sources)} trovate):\n\n"
+            f"{context}\n\n"
+            f"---\n\n"
+            f"DOMANDA: {question}"
+        )
 
         logger.info(
             "Generazione risposta con %d email di contesto (modello: %s)...",

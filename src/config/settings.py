@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     # ── Indicizzazione ───────────────────────────────────────────────────────
     max_emails: int = 300
     chroma_path: str = "./chroma_db"
+    embed_char_limit: int = 8000        # caratteri max inviati a Ollama per embedding
+    fetch_attachments: bool = True       # scarica e indicizza allegati (PDF, Word, Excel)
 
     # ── Ricerca ──────────────────────────────────────────────────────────────
     top_k: int = 5
@@ -38,7 +40,6 @@ class Settings(BaseSettings):
 settings = Settings()
 
 # ── Logging centralizzato ────────────────────────────────────────────────────
-# Configurato qui una volta sola; tutti i moduli usano logging.getLogger(__name__)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
